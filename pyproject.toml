@@ -1,17 +1,11 @@
-[tool.poetry]
-name = "parley"
+[project]
+name = "parley-tap-prompt-injection"
 version = "0.1.0"
-description = ""
-authors = ["Nick Landers <nick@dreadnode.io>"]
+description = "Add your description here"
 readme = "README.md"
-
-[tool.poetry.dependencies]
-python = "^3.10"
-openai = "^1.5.0"
-together = "^0.2.10"
-mistralai = "^0.0.8"
-
-
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires-python = ">=3.12"
+dependencies = [
+    "mistralai>=1.9.3",
+    "openai>=1.98.0",
+    "together>=1.5.21",
+]

@@ -17,7 +17,7 @@ from _types import (
     Feedback,
     TreeNode,
 )
-from models import chat_mistral, chat_openai, chat_together
+from models import chat_openai, chat_together
 from prompts import (
     get_prompt_for_evaluator_score,
     get_prompt_for_evaluator_on_topic,
@@ -29,12 +29,12 @@ Models: t.Dict[str, t.Tuple] = {
     "gpt-3.5": (chat_openai, "gpt-3.5-turbo"),
     "gpt-4": (chat_openai, "gpt-4"),
     "gpt-4-turbo": (chat_openai, "gpt-4-1106-preview"),
+    "gpt-4o": (chat_openai, "gpt-4o"),
+    "gpt-4o-mini": (chat_openai, "gpt-4o-mini"),
     "llama-13b": (chat_together, "togethercomputer/llama-2-13b-chat"),
     "llama-70b": (chat_together, "togethercomputer/llama-2-70b-chat"),
     "vicuna-13b": (chat_together, "lmsys/vicuna-13b-v1.5"),
     "mistral-small-together": (chat_together, "mistralai/Mixtral-8x7B-Instruct-v0.1"),
-    "mistral-small": (chat_mistral, "mistral-small"),
-    "mistral-medium": (chat_mistral, "mistral-medium"),
 }
 
 
@@ -303,7 +303,7 @@ if __name__ == "__main__":
     parser.add_argument("--evaluator-max-tokens", type=int, default=10, help="Evaluator max tokens")
 
     parser.add_argument(
-        "--attacker-model", type=str, default="mistral-small", choices=Models.keys(), help="Attacker model"
+        "--attacker-model", type=str, default="mistral-small-together", choices=Models.keys(), help="Attacker model"
     )
     parser.add_argument("--attacker-temp", type=float, default=1.0, help="Attacker temperature")
     parser.add_argument("--attacker-top-p", type=float, default=1.0, help="Attacker top-p")
