@@ -13,7 +13,9 @@ class Role(str, Enum):
 
 class Message(BaseModel):
     role: Role
-    content: str
+    content: t.Optional[str] = None  # Can be None for assistant messages with only tool_calls
+    tool_calls: t.Optional[t.List[t.Dict[str, t.Any]]] = None  # For assistant messages with tool calls
+    tool_call_id: t.Optional[str] = None  # For tool response messages
 
 
 class Feedback(BaseModel):

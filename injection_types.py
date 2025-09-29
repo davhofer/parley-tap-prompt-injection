@@ -40,7 +40,10 @@ class TrainingExample(BaseModel):
 
     example_id: str
     conversation_history: t.List[Message]  # Chat messages with {optim_str} placeholder
-    target_tool_calls: t.List[str]  # Tools the attack should trigger
+    target_tool_calls: t.List[
+        str
+    ]  # Full tool calls (as JSON strings) the attack should trigger
+    attacker_goal: str  # High-level goal the attacker is trying to achieve
     available_tools: t.List[Tool]  # Tools available to the target model in this context
 
 
@@ -63,7 +66,6 @@ class InjectionResult(BaseModel):
     Captures what tools were actually triggered and success metrics.
     """
 
-    # TODO: do we actually execute any tool calls? or just do static parsing & matching?
     example_id: str
     injection_string: str
     triggered_tools: t.List[str]  # Tools actually called by the model
@@ -121,9 +123,8 @@ class InjectionConfig(BaseModel):
     success_threshold: float = 0.8  # Score threshold for stopping
 
     # Injection constraints
-    max_injection_length: int = 500  # Maximum characters in injection string
+    max_injection_length: int = 1000  # Maximum characters in injection string
     min_injection_length: int = 10  # Minimum characters in injection string
-    # TODO: rename/change this argument?
     preserve_conversation_flow: bool = False  # Should injection fit naturally
 
     # Tree search parameters (inherited from original TAP)
@@ -131,7 +132,7 @@ class InjectionConfig(BaseModel):
     branching_factor: int = 3
     width: int = 10
     depth: int = 10
-    
+
     # Debug flag
     debug: bool = False
 
@@ -165,10 +166,6 @@ class InjectionAttackFramework:
         Uses the attacker model to propose improved injection strings based on
         previous results and conversation context.
         """
-        # Implement injection string generation
-        # - Build context from previous results across all training examples
-        # - Call attacker model with injection-specific prompts
-        # - Parse and validate generated injection strings
         raise NotImplementedError()
 
     def evaluate_injection_string(self, injection_string: str) -> AggregatedResult:
@@ -182,15 +179,7 @@ class InjectionAttackFramework:
         4. Score success based on target tool call matching
         5. Aggregate scores across all examples
         """
-        # TODO: Implement multi-example evaluation
-        # - Loop through all training examples
-        # - Insert injection at appropriate point
-        # - Execute against target model
-        # - Parse tool calls from response
-        # - Calculate individual and aggregated scores
-        for sample in self.config.training_examples:
-            pass
-        pass
+        raise NotImplementedError()
 
     def check_injection_relevance(self, injection_string: str) -> bool:
         """
@@ -199,11 +188,7 @@ class InjectionAttackFramework:
         Uses evaluator model to determine if the injection attempts to
         achieve the target tool calls in the given contexts.
         """
-        # TODO: Implement relevance checking
-        # - Build prompt describing training examples and targets
-        # - Ask evaluator if injection string is attempting the right goals
-        # - Return boolean relevance decision
-        pass
+        raise NotImplementedError()
 
     def run_attack(self) -> t.Optional[str]:
         """
@@ -212,13 +197,4 @@ class InjectionAttackFramework:
         Returns the best injection string found, or None if no successful
         attack was discovered within the search parameters.
         """
-        # TODO: Implement main attack loop
-        # - Initialize root nodes
-        # - For each depth level:
-        #   - Generate candidates for each node
-        #   - Evaluate candidates against all training examples
-        #   - Check relevance and filter
-        #   - Prune tree to maintain width limit
-        #   - Check if success threshold reached
-        # - Return best injection string or None
-        pass
+        raise NotImplementedError()
