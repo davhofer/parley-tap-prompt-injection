@@ -9,7 +9,7 @@ These prompts adapt the original TAP framework to focus on:
 
 import typing as t
 import json
-from injection_types import TrainingExample
+from ..core.injection_types import TrainingExample
 
 
 def get_prompt_for_injection_attacker(

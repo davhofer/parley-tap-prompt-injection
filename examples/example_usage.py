@@ -7,20 +7,18 @@ import typing as t
 from pathlib import Path
 
 # Import the main components
-from injection_parley import InjectionAttackFrameworkImpl, load_training_examples
-from injection_types import (
+from parley_tap.attacks.injection_parley import InjectionAttackFrameworkImpl, load_training_examples
+from parley_tap.core.injection_types import (
     InjectionConfig,
     ToolCallMatch,
     AggregationStrategy,
     TrainingExample,
-    Message,
-    Role,
 )
-from parley import load_models
-from _types import Parameters
+from parley_tap.core.types import Message, Role, Parameters
+from parley_tap.attacks.parley import load_models
 
 # For creating custom training examples programmatically
-from models import chat_openai, chat_together
+from parley_tap.core.models import chat_openai, chat_together
 
 
 def run_injection_attack_from_file(training_file: str):

@@ -8,7 +8,7 @@ import functools
 import typing as t
 import re
 
-from _types import (
+from ..core.types import (
     ChatFunction,
     Message,
     Parameters,
@@ -17,8 +17,8 @@ from _types import (
     Feedback,
     TreeNode,
 )
-from models import chat_openai, chat_together
-from prompts import (
+from ..core.models import chat_openai, chat_together
+from ..prompts.prompts import (
     get_prompt_for_evaluator_score,
     get_prompt_for_evaluator_on_topic,
     get_prompt_for_attacker,

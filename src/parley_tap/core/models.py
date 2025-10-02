@@ -2,7 +2,7 @@ import os
 import typing as t
 
 import openai
-from _types import Message, Parameters, Role
+from .types import Message, Parameters, Role
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
 

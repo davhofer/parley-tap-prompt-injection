@@ -11,7 +11,7 @@ import typing as t
 from enum import Enum
 from pydantic import BaseModel
 
-from _types import Message, Role, Tool
+from .types import Message, Role, Tool
 
 
 class ToolCallMatch(str, Enum):
@@ -74,6 +74,10 @@ class InjectionResult(BaseModel):
     parsing_successful: bool  # Whether tool calls could be extracted
     execution_error: t.Optional[str] = None  # Any errors during evaluation
 
+    # Reliability tracking
+    trial_results: t.Optional[t.List[float]] = None  # Scores from individual trials
+    reliability_score: t.Optional[float] = None  # Success rate across trials
+
 
 class AggregatedResult(BaseModel):
     """
@@ -86,6 +90,10 @@ class AggregatedResult(BaseModel):
     aggregation_strategy: AggregationStrategy
     success_rate: float  # Percentage of examples that succeeded
     total_examples: int
+
+    # Reliability metrics
+    overall_reliability: t.Optional[float] = None  # Average reliability across examples
+    reliable_examples: t.Optional[int] = None  # Examples meeting reliability threshold
 
 
 class InjectionTreeNode(BaseModel):
@@ -121,6 +129,10 @@ class InjectionConfig(BaseModel):
     tool_match_strategy: ToolCallMatch = ToolCallMatch.EXACT
     aggregation_strategy: AggregationStrategy = AggregationStrategy.MEAN
     success_threshold: float = 0.8  # Score threshold for stopping
+
+    # Reliability testing parameters
+    reliability_trials: int = 1  # Number of times to test each injection
+    reliability_threshold: float = 0.8  # Minimum success rate across trials
 
     # Injection constraints
     max_injection_length: int = 1000  # Maximum characters in injection string
