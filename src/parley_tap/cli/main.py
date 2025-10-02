@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from ..attacks.injection_parley import InjectionAttackFrameworkImpl, load_training_examples
-from ..attacks.parley import load_models
+from ..core.models import load_models
 from ..core.injection_types import (
     InjectionConfig,
     ToolCallMatch,

@@ -15,7 +15,7 @@ import re
 import json
 
 from ..core.types import ChatFunction, Message, Role, Parameters, Tool, ToolFunction
-from .parley import Models, load_models
+from ..core.models import Models, load_models
 from ..core.injection_types import (
     TrainingExample,
     InjectionFeedback,

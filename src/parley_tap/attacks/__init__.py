@@ -1,7 +1,7 @@
 """Attack implementations for prompt injection."""
 
 from .injection_parley import InjectionAttackFrameworkImpl, load_training_examples
-from .parley import load_models, Models
+from ..core.models import load_models, Models
 
 __all__ = [
     "InjectionAttackFrameworkImpl",
