@@ -74,6 +74,7 @@ Models: t.Dict[str, t.Tuple] = {
     "gpt-4-turbo": (chat_openai, "gpt-4-1106-preview"),
     "gpt-4o": (chat_openai, "gpt-4o"),
     "gpt-4o-mini": (chat_openai, "gpt-4o-mini"),
+    "gpt-4o-mini-2024-07-18": (chat_openai, "gpt-4o-mini-2024-07-18"),  # Specific version
     "llama-13b": (chat_together, "togethercomputer/llama-2-13b-chat"),
     "llama-70b": (chat_together, "togethercomputer/llama-2-70b-chat"),
     "vicuna-13b": (chat_together, "lmsys/vicuna-13b-v1.5"),
