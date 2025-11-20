@@ -20,45 +20,48 @@ def _chat_openai(
         "max_tokens": parameters.max_tokens,
         "top_p": parameters.top_p,
     }
-    
+
     # Add tools if provided
     if parameters.tools:
         request_params["tools"] = [tool.model_dump() for tool in parameters.tools]
         if parameters.tool_choice:
             request_params["tool_choice"] = parameters.tool_choice
-    
+
     response = client.chat.completions.create(**request_params)
-    
+
     response_message = response.choices[0].message
     message = Message(
-        role=Role(response_message.role), 
-        content=str(response_message.content) if response_message.content else ""
+        role=Role(response_message.role),
+        content=str(response_message.content) if response_message.content else "",
     )
-    
+
     # If the response contains tool calls, return them alongside the message
-    if hasattr(response_message, 'tool_calls') and response_message.tool_calls:
+    if hasattr(response_message, "tool_calls") and response_message.tool_calls:
         tool_calls = [
             {
                 "id": tool_call.id,
                 "type": tool_call.type,
                 "function": {
                     "name": tool_call.function.name,
-                    "arguments": tool_call.function.arguments
-                }
+                    "arguments": tool_call.function.arguments,
+                },
             }
             for tool_call in response_message.tool_calls
         ]
         return message, tool_calls
-    
+
     return message
 
 
-def chat_openai(messages: t.List[Message], parameters: Parameters) -> t.Union[Message, t.Tuple[Message, t.List[t.Dict[str, t.Any]]]]:
+def chat_openai(
+    messages: t.List[Message], parameters: Parameters
+) -> t.Union[Message, t.Tuple[Message, t.List[t.Dict[str, t.Any]]]]:
     return _chat_openai(OpenAI(), messages, parameters)
 
 
-
-def chat_together(messages: t.List[Message], parameters: Parameters) -> t.Union[Message, t.Tuple[Message, t.List[t.Dict[str, t.Any]]]]:
+def chat_together(
+    messages: t.List[Message], parameters: Parameters
+) -> t.Union[Message, t.Tuple[Message, t.List[t.Dict[str, t.Any]]]]:
     client = openai.OpenAI(
         api_key=os.environ["TOGETHER_API_KEY"],
         base_url="https://api.together.xyz/v1",
@@ -74,7 +77,10 @@ Models: t.Dict[str, t.Tuple] = {
     "gpt-4-turbo": (chat_openai, "gpt-4-1106-preview"),
     "gpt-4o": (chat_openai, "gpt-4o"),
     "gpt-4o-mini": (chat_openai, "gpt-4o-mini"),
-    "gpt-4o-mini-2024-07-18": (chat_openai, "gpt-4o-mini-2024-07-18"),  # Specific version
+    "gpt-4o-mini-2024-07-18": (
+        chat_openai,
+        "gpt-4o-mini-2024-07-18",
+    ),  # Specific version
     "llama-13b": (chat_together, "togethercomputer/llama-2-13b-chat"),
     "llama-70b": (chat_together, "togethercomputer/llama-2-70b-chat"),
     "vicuna-13b": (chat_together, "lmsys/vicuna-13b-v1.5"),
