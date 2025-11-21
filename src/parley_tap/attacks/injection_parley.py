@@ -152,10 +152,25 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
                         example, injection_string
                     )
 
+                    # Debug: Show available tools
+                    if self.config.debug and trial == 0:  # Only show once per example
+                        print(f"        DEBUG - Available tools ({len(example.available_tools)}):")
+                        for tool in example.available_tools[:2]:  # Show first 2
+                            print(f"          - {tool.function.name}: {tool.function.description[:80]}...")
+
                     # Get target model response with tools enabled
                     response_content, tool_calls = self._call_target_with_tools(
                         test_conversation, example.available_tools
                     )
+
+                    # Debug: Show raw tool calls and response
+                    if self.config.debug:
+                        print(f"        DEBUG - Response content: '{response_content[:200] if response_content else '[EMPTY]'}'")
+                        if tool_calls:
+                            print(f"        DEBUG - Raw tool calls from API:")
+                            print(f"          {json.dumps(tool_calls, indent=10)}")
+                        else:
+                            print(f"        DEBUG - No tool calls made")
 
                     # Calculate success based on actual tool calls
                     tool_call_success = self._calculate_tool_call_success(
@@ -218,9 +233,19 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
                         print(f"        Tool calls: {len(best_tool_calls)}")
                         for tc in best_tool_calls[:3]:  # Show first 3 tool calls
                             if "function" in tc:
-                                print(
-                                    f"          - {tc['function'].get('name', 'unknown')}"
-                                )
+                                func_name = tc['function'].get('name', 'unknown')
+                                func_args = tc['function'].get('arguments', '{}')
+                                # Parse arguments if it's a JSON string
+                                try:
+                                    if isinstance(func_args, str):
+                                        args_dict = json.loads(func_args)
+                                        args_str = json.dumps(args_dict, indent=12).replace('\n', '\n            ')
+                                    else:
+                                        args_str = json.dumps(func_args, indent=12).replace('\n', '\n            ')
+                                    print(f"          - {func_name}({args_str})")
+                                except:
+                                    # If parsing fails, show raw
+                                    print(f"          - {func_name}({func_args})")
                         if len(best_tool_calls) > 3:
                             print(f"          ... and {len(best_tool_calls) - 3} more")
                     else:
