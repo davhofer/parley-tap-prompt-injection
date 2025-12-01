@@ -17,9 +17,25 @@ def _chat_openai(
         "model": parameters.model,
         "messages": t.cast(t.List[ChatCompletionMessageParam], messages),
         "temperature": parameters.temperature,
-        "max_tokens": parameters.max_tokens,
         "top_p": parameters.top_p,
     }
+
+    model_lower = parameters.model.lower()
+
+    # Check if this is a reasoning model that has parameter restrictions
+    is_reasoning_model = any(x in model_lower for x in ["gpt-5", "o1-", "o3-"])
+
+    # Newer OpenAI models require max_completion_tokens instead of max_tokens
+    if any(x in model_lower for x in ["gpt-5", "o1", "o3"]):  # "gpt-4o",
+        request_params["max_completion_tokens"] = parameters.max_tokens
+    else:
+        request_params["max_tokens"] = parameters.max_tokens
+
+    # Reasoning models (gpt-5, o1, o3) only support temperature=1.0
+    # Remove temperature param for these models to use default
+    if is_reasoning_model:
+        del request_params["temperature"]
+        del request_params["top_p"]
 
     # Add tools if provided
     if parameters.tools:
@@ -30,6 +46,13 @@ def _chat_openai(
     response = client.chat.completions.create(**request_params)
 
     response_message = response.choices[0].message
+
+    # Debug: print full response info when content is empty
+    if not response_message.content:
+        print(
+            f"    [DEBUG] Empty response - finish_reason: {response.choices[0].finish_reason}, refusal: {getattr(response_message, 'refusal', None)}"
+        )
+
     message = Message(
         role=Role(response_message.role),
         content=str(response_message.content) if response_message.content else "",
@@ -70,6 +93,23 @@ def chat_together(
     return _chat_openai(client, messages, parameters)
 
 
+def chat_vllm(
+    messages: t.List[Message], parameters: Parameters
+) -> t.Union[Message, t.Tuple[Message, t.List[t.Dict[str, t.Any]]]]:
+    """Chat with a local vLLM server using OpenAI-compatible API."""
+    base_url = os.environ.get("VLLM_BASE_URL", "http://localhost:8000/v1")
+    api_key = os.environ.get(
+        "VLLM_API_KEY", "dummy"
+    )  # vLLM doesn't require auth by default
+
+    client = openai.OpenAI(
+        api_key=api_key,
+        base_url=base_url,
+    )
+
+    return _chat_openai(client, messages, parameters)
+
+
 # Model registry mapping model names to (function, model_id) tuples
 Models: t.Dict[str, t.Tuple] = {
     "gpt-3.5": (chat_openai, "gpt-3.5-turbo"),
@@ -81,10 +121,15 @@ Models: t.Dict[str, t.Tuple] = {
         chat_openai,
         "gpt-4o-mini-2024-07-18",
     ),  # Specific version
+    "gpt-5": (chat_openai, "gpt-5-2025-08-07"),
+    "gpt-5.1": (chat_openai, "gpt-5.1-2025-11-13"),
+    "gpt-5-mini": (chat_openai, "gpt-5-mini-2025-08-07"),
     "llama-13b": (chat_together, "togethercomputer/llama-2-13b-chat"),
     "llama-70b": (chat_together, "togethercomputer/llama-2-70b-chat"),
     "vicuna-13b": (chat_together, "lmsys/vicuna-13b-v1.5"),
     "mistral-small-together": (chat_together, "mistralai/Mixtral-8x7B-Instruct-v0.1"),
+    # Local vLLM models
+    "qwen3-4b": (chat_vllm, "Qwen/Qwen3-4B-Instruct-2507"),
 }
 
 
