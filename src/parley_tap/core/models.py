@@ -46,11 +46,21 @@ def _chat_openai(
     response = client.chat.completions.create(**request_params)
 
     response_message = response.choices[0].message
+    finish_reason = response.choices[0].finish_reason
+
+    # Check for context length exceeded
+    if finish_reason == "length":
+        usage_info = ""
+        if response.usage:
+            usage_info = f" (prompt_tokens={response.usage.prompt_tokens}, completion_tokens={response.usage.completion_tokens}, total={response.usage.total_tokens})"
+        raise Exception(
+            f"Context length exceeded: response truncated due to max tokens limit{usage_info}"
+        )
 
     # Debug: print full response info when content is empty
     if not response_message.content:
         print(
-            f"    [DEBUG] Empty response - finish_reason: {response.choices[0].finish_reason}, refusal: {getattr(response_message, 'refusal', None)}"
+            f"    [DEBUG] Empty response - finish_reason: {finish_reason}, refusal: {getattr(response_message, 'refusal', None)}"
         )
 
     message = Message(
