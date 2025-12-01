@@ -14,20 +14,11 @@ from pydantic import BaseModel
 from .types import Message, Role, Tool
 
 
-class ToolCallMatch(str, Enum):
-    """Strategies for matching target tool calls with actual calls."""
+class TrialAggregationStrategy(str, Enum):
+    """Methods for aggregating scores across reliability trials for a single sample."""
 
-    EXACT = "exact"  # Exact string match
-    JSON = "json"  # Parsed json object should be equivalent
-    SUBSTRING = "substring"  # Tool name contains target
-    SEMANTIC = "semantic"  # Semantic similarity of tool purpose
-
-
-class AggregationStrategy(str, Enum):
-    """Methods for aggregating scores across multiple training examples."""
-
-    MEAN = "mean"  # Average score across examples
-    MIN = "min"  # Minimum score (most conservative)
+    BEST = "best"  # Take the best (max) score across trials
+    MEAN = "mean"  # Take the average score across trials
 
 
 class TrainingExample(BaseModel):
@@ -45,6 +36,7 @@ class TrainingExample(BaseModel):
     ]  # Full tool calls (as JSON strings) the attack should trigger
     attacker_goal: str  # High-level goal the attacker is trying to achieve
     available_tools: t.List[Tool]  # Tools available to the target model in this context
+    user_task_context: t.Optional[str] = None  # The legitimate user task (to distinguish from attacker goal)
 
 
 class InjectionFeedback(BaseModel):
@@ -70,13 +62,12 @@ class InjectionResult(BaseModel):
     injection_string: str
     triggered_tools: t.List[str]  # Tools actually called by the model
     raw_response: str  # Full model response for analysis
-    success_score: float  # 0-1 score for this specific example
+    success_score: float  # 0-1 score for this specific example (aggregated from trials)
     parsing_successful: bool  # Whether tool calls could be extracted
     execution_error: t.Optional[str] = None  # Any errors during evaluation
 
     # Reliability tracking
     trial_results: t.Optional[t.List[float]] = None  # Scores from individual trials
-    reliability_score: t.Optional[float] = None  # Success rate across trials
 
 
 class AggregatedResult(BaseModel):
@@ -86,14 +77,9 @@ class AggregatedResult(BaseModel):
 
     injection_string: str
     individual_results: t.List[InjectionResult]
-    aggregated_score: float  # Final score after aggregation
-    aggregation_strategy: AggregationStrategy
+    aggregated_score: float  # Final score after aggregation (mean across examples)
     success_rate: float  # Percentage of examples that succeeded
     total_examples: int
-
-    # Reliability metrics
-    overall_reliability: t.Optional[float] = None  # Average reliability across examples
-    reliable_examples: t.Optional[int] = None  # Examples meeting reliability threshold
 
 
 class InjectionTreeNode(BaseModel):
@@ -126,17 +112,11 @@ class InjectionConfig(BaseModel):
     training_examples: t.List[TrainingExample]
 
     # Evaluation settings
-    tool_match_strategy: ToolCallMatch = ToolCallMatch.EXACT
-    aggregation_strategy: AggregationStrategy = AggregationStrategy.MEAN
     success_threshold: float = 0.8  # Score threshold for stopping
-
-    # Score weighting (0.0-1.0): weight for tool call matching vs evaluator
-    # combined_score = tool_weight * tool_success + (1 - tool_weight) * evaluator_score
-    tool_call_weight: float = 0.7  # Weight for exact tool call matching
 
     # Reliability testing parameters
     reliability_trials: int = 1  # Number of times to test each injection
-    reliability_threshold: float = 0.8  # Minimum success rate across trials
+    trial_aggregation_strategy: TrialAggregationStrategy = TrialAggregationStrategy.BEST  # How to aggregate trial scores
 
     # Injection constraints
     max_injection_length: int = 1000  # Maximum characters in injection string
