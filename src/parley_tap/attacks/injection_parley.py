@@ -273,18 +273,7 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
                     print(f"    [DEBUG] Exception during evaluation of example {example.example_id}: {e}")
                     import traceback
                     traceback.print_exc()
-                # Handle evaluation errors gracefully
-                error_result = InjectionResult(
-                    example_id=example.example_id,
-                    injection_string=injection_string,
-                    triggered_tools=[],
-                    raw_response="",
-                    success_score=0.0,
-                    parsing_successful=False,
-                    execution_error=str(e),
-                    trial_results=[0.0] * self.config.reliability_trials,
-                )
-                individual_results.append(error_result)
+                raise
 
         # Aggregate scores across all examples
         aggregated_score = self._aggregate_scores(individual_results)
