@@ -45,10 +45,35 @@ class InjectionFeedback(BaseModel):
 
     Similar to original Feedback but focused on injection strings
     rather than full jailbreak prompts.
+
+    For single-sample mode: uses injection_string directly.
+    For multi-sample mode: uses prefix + attacker_goal + suffix to construct injection.
     """
 
-    injection_string: str  # The actual injection content to insert
+    # Single-sample mode field
+    injection_string: str = ""  # The actual injection content to insert (single-sample)
+
+    # Multi-sample mode fields (PREFIX + goal + SUFFIX format)
+    prefix: str = ""  # Text before the attacker goal
+    suffix: str = ""  # Text after the attacker goal
+
     improvement: str  # Analysis of previous attempt and proposed changes
+
+    @property
+    def is_multi_sample(self) -> bool:
+        """Check if this feedback is for multi-sample mode (has prefix/suffix)."""
+        return bool(self.prefix) and not bool(self.injection_string)
+
+    def get_injection_for_goal(self, attacker_goal: str) -> str:
+        """
+        Get the full injection string for a given attacker goal.
+
+        For single-sample: returns injection_string directly.
+        For multi-sample: returns prefix + attacker_goal + suffix.
+        """
+        if self.injection_string:
+            return self.injection_string
+        return f"{self.prefix}{attacker_goal}{self.suffix}"
 
 
 class InjectionResult(BaseModel):
@@ -73,13 +98,24 @@ class InjectionResult(BaseModel):
 class AggregatedResult(BaseModel):
     """
     Aggregated results across all training examples for a single injection string.
+
+    For multi-sample mode, also stores prefix and suffix separately.
     """
 
-    injection_string: str
+    injection_string: str  # For single-sample, or constructed string for display
     individual_results: t.List[InjectionResult]
     aggregated_score: float  # Final score after aggregation (mean across examples)
     success_rate: float  # Percentage of examples that succeeded
     total_examples: int
+
+    # Multi-sample mode fields
+    prefix: str = ""  # Prefix used (multi-sample mode)
+    suffix: str = ""  # Suffix used (multi-sample mode)
+
+    @property
+    def is_multi_sample(self) -> bool:
+        """Check if this result is from multi-sample mode."""
+        return bool(self.prefix)
 
 
 class InjectionTreeNode(BaseModel):

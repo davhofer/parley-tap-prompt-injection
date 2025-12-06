@@ -43,7 +43,20 @@ def _chat_openai(
         if parameters.tool_choice:
             request_params["tool_choice"] = parameters.tool_choice
 
-    response = client.chat.completions.create(**request_params)
+    try:
+        response = client.chat.completions.create(**request_params)
+    except Exception as e:
+        # Debug: print request details on error
+        print(f"\n[DEBUG] OpenAI API Error: {e}")
+        print(f"[DEBUG] Model: {parameters.model}")
+        print(f"[DEBUG] Number of messages: {len(messages)}")
+        print(f"[DEBUG] Message types: {[type(m).__name__ for m in messages]}")
+        if messages:
+            print(f"[DEBUG] First message: {messages[0]}")
+            if len(messages) > 1:
+                print(f"[DEBUG] Last message: {messages[-1]}")
+        print(f"[DEBUG] Request params (excluding messages): { {k: v for k, v in request_params.items() if k != 'messages'} }")
+        raise
 
     response_message = response.choices[0].message
     finish_reason = response.choices[0].finish_reason

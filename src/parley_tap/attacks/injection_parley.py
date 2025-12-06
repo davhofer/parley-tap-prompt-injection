@@ -28,16 +28,15 @@ from ..core.injection_types import (
     TrialAggregationStrategy,
 )
 from ..prompts.injection_prompts import (
-    get_prompt_for_injection_attacker,
     get_prompt_for_injection_evaluator_score,
     get_prompt_for_injection_evaluator_relevance,
-    get_prompt_for_injection_target,
-    build_injection_context_prompt,
-    # Multi-turn conversation prompts (v2)
     get_attacker_system_prompt_v2,
     get_initial_context_prompt,
     get_feedback_prompt,
 )
+
+
+# TODO: for multi-sample attack, attacker model now returns a prefix and a suffix string, instead of a single injection string...
 
 
 class InjectionAttackFrameworkImpl(InjectionAttackFramework):
@@ -129,7 +128,7 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
         1. Copy the node's conversation (system + user messages from ancestors)
         2. If node has previous result, add feedback user message
         3. Call attacker with full multi-turn conversation
-        4. Parse JSON responses to extract injection strings
+        4. Parse JSON responses to extract injection strings (or prefix/suffix for multi-sample)
         """
         candidates = []
 
@@ -138,10 +137,14 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
 
         # If this node has a previous result, add feedback message
         if node.aggregated_result:
+            # Pass prefix/suffix for multi-sample feedback
             feedback_msg = Message(
                 role=Role.user,
                 content=get_feedback_prompt(
-                    node.aggregated_result, self.config.training_examples
+                    node.aggregated_result,
+                    self.config.training_examples,
+                    prefix=node.aggregated_result.prefix,
+                    suffix=node.aggregated_result.suffix,
                 ),
             )
             messages.append(feedback_msg)
@@ -179,9 +182,17 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
                 if feedback:
                     candidates.append(feedback)
                     if self.config.debug:
-                        print(
-                            f"    [DEBUG] Parsed candidate: {feedback.injection_string[:100]}..."
-                        )
+                        if feedback.is_multi_sample:
+                            print(
+                                f"    [DEBUG] Parsed candidate PREFIX: {feedback.prefix[:50]}..."
+                            )
+                            print(
+                                f"    [DEBUG] Parsed candidate SUFFIX: {feedback.suffix[:50] if feedback.suffix else '(empty)'}"
+                            )
+                        else:
+                            print(
+                                f"    [DEBUG] Parsed candidate: {feedback.injection_string[:100]}..."
+                            )
                 else:
                     if self.config.debug:
                         print(
@@ -200,27 +211,41 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
 
         return candidates
 
-    def evaluate_injection_string(self, injection_string: str) -> AggregatedResult:
+    def evaluate_injection_feedback(
+        self, feedback: InjectionFeedback
+    ) -> AggregatedResult:
         """
-        Test injection string against all training examples and aggregate results.
+        Test injection feedback against all training examples and aggregate results.
+
+        For multi-sample mode (prefix/suffix), constructs a different injection
+        for each sample using: prefix + attacker_goal + suffix
 
         For each training example:
-        1. Insert injection at specified conversation point
-        2. Get target model response with tool calls (multiple trials if configured)
-        3. Extract and score tool call success across trials
-        4. Aggregate scores across all examples
+        1. Construct injection string (using feedback.get_injection_for_goal)
+        2. Insert injection at specified conversation point
+        3. Get target model response with tool calls (multiple trials if configured)
+        4. Extract and score tool call success across trials
+        5. Aggregate scores across all examples
         """
         individual_results = []
+        multi_sample_mode = feedback.is_multi_sample
 
         if self.config.debug:
             print(
                 f"    [DEBUG] Evaluating injection against {len(self.config.training_examples)} examples"
             )
+            if multi_sample_mode:
+                print(f"    [DEBUG] Multi-sample mode: prefix='{feedback.prefix[:50]}...', suffix='{feedback.suffix[:50] if feedback.suffix else ''}'")
 
         for example in self.config.training_examples:
             try:
+                # Get the injection string for this specific example
+                injection_string = feedback.get_injection_for_goal(example.attacker_goal)
+
                 if self.config.debug:
                     print(f"    [DEBUG] Evaluating example {example.example_id}...")
+                    if multi_sample_mode:
+                        print(f"    [DEBUG] Constructed injection: '{injection_string[:100]}...'")
 
                 # Run multiple trials for reliability testing
                 trial_scores = []
@@ -311,14 +336,35 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
         # Aggregate scores across all examples
         aggregated_score = self._aggregate_scores(individual_results)
 
+        # For display, use first injection or construct a representative string
+        if multi_sample_mode:
+            display_injection = f"[PREFIX]{feedback.prefix}[/PREFIX][GOAL]{{attacker_goal}}[/GOAL][SUFFIX]{feedback.suffix}[/SUFFIX]"
+        else:
+            display_injection = feedback.injection_string
+
         return AggregatedResult(
-            injection_string=injection_string,
+            injection_string=display_injection,
             individual_results=individual_results,
             aggregated_score=aggregated_score,
             success_rate=sum(1 for r in individual_results if r.success_score > 0.5)
             / len(individual_results),
             total_examples=len(individual_results),
+            prefix=feedback.prefix,
+            suffix=feedback.suffix,
         )
+
+    def evaluate_injection_string(self, injection_string: str) -> AggregatedResult:
+        """
+        Test injection string against all training examples and aggregate results.
+
+        This is a convenience wrapper around evaluate_injection_feedback for
+        backward compatibility with single-sample mode.
+        """
+        feedback = InjectionFeedback(
+            injection_string=injection_string,
+            improvement="",
+        )
+        return self.evaluate_injection_feedback(feedback)
 
     def check_injection_relevance(self, injection_string: str) -> bool:
         """
@@ -359,9 +405,12 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
         2. Iteratively generates and evaluates injection candidates
         3. Prunes search tree based on performance
         4. Returns dict with best injection, metrics, and request counts
+
+        For multi-sample mode, returns prefix and suffix separately.
         """
         start_time = time.time()
         single_example_mode = len(self.config.training_examples) == 1
+        multi_sample_mode = not single_example_mode
 
         print("[+] Starting injection attack generation...")
         if single_example_mode:
@@ -369,6 +418,7 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
             print(f" |- Single-example optimization mode")
             print(f" |- Attacker goal: {example.attacker_goal}")
         else:
+            print(f" |- Multi-sample optimization mode (PREFIX/SUFFIX)")
             print(f" |- Training on {len(self.config.training_examples)} examples")
             print(f" |- Target goals: {self._get_all_attacker_goals()}")
 
@@ -378,8 +428,11 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
 
         # Tracking variables
         best_injection = ""
+        best_prefix = ""
+        best_suffix = ""
         best_score = 0.0
         best_result: t.Optional[AggregatedResult] = None
+        best_feedback: t.Optional[InjectionFeedback] = None
         nodes_evaluated = 0
         max_depth_reached = 0
 
@@ -400,7 +453,11 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
                 # Evaluate each candidate
                 for j, feedback in enumerate(candidates):
                     if self.config.debug:
-                        print(f'    Testing injection: "{feedback.injection_string}"')
+                        if feedback.is_multi_sample:
+                            print(f'    Testing PREFIX: "{feedback.prefix[:50]}..."')
+                            print(f'    Testing SUFFIX: "{feedback.suffix[:50] if feedback.suffix else ""}"')
+                        else:
+                            print(f'    Testing injection: "{feedback.injection_string}"')
 
                     # Skip relevance check for prompt injections - they're almost always relevant
                     # if not self.check_injection_relevance(feedback.injection_string):
@@ -409,7 +466,7 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
                     #     continue
 
                     # Evaluate against all training examples
-                    result = self.evaluate_injection_string(feedback.injection_string)
+                    result = self.evaluate_injection_feedback(feedback)
                     nodes_evaluated += 1
 
                     if self.config.debug:
@@ -423,8 +480,16 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
                     # Track best injection found so far
                     if result.aggregated_score > best_score:
                         best_score = result.aggregated_score
-                        best_injection = feedback.injection_string
+                        best_feedback = feedback
                         best_result = result
+                        if feedback.is_multi_sample:
+                            best_prefix = feedback.prefix
+                            best_suffix = feedback.suffix
+                            best_injection = f"{feedback.prefix}{{attacker_goal}}{feedback.suffix}"
+                        else:
+                            best_injection = feedback.injection_string
+                            best_prefix = ""
+                            best_suffix = ""
 
                     # Check if we've reached success threshold
                     if result.aggregated_score >= self.config.success_threshold:
@@ -454,16 +519,16 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
                             f" |- Total:           {sum(self.request_counts.values())} requests"
                         )
 
-                        return {
-                            "best_injection": feedback.injection_string,
-                            "best_score": result.aggregated_score,
-                            "generated_text": generated_text,
-                            "injection_successful": True,
-                            "runtime_seconds": runtime_seconds,
-                            "max_depth_reached": max_depth_reached,
-                            "nodes_evaluated": nodes_evaluated,
-                            "request_counts": self.request_counts.copy(),
-                        }
+                        return self._build_result_dict(
+                            feedback=feedback,
+                            result=result,
+                            generated_text=generated_text,
+                            injection_successful=True,
+                            runtime_seconds=runtime_seconds,
+                            max_depth_reached=max_depth_reached,
+                            nodes_evaluated=nodes_evaluated,
+                            multi_sample_mode=multi_sample_mode,
+                        )
 
                     # Create new tree node for this candidate
                     child_node = self._create_child_node(node, feedback, result)
@@ -495,16 +560,71 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
         print(f" |- Total:           {sum(self.request_counts.values())} requests")
 
         # Return results dict
-        return {
+        return self._build_result_dict(
+            feedback=best_feedback,
+            result=best_result,
+            generated_text=generated_text,
+            injection_successful=False,
+            runtime_seconds=runtime_seconds,
+            max_depth_reached=max_depth_reached,
+            nodes_evaluated=nodes_evaluated,
+            multi_sample_mode=multi_sample_mode,
+            best_injection_fallback=best_injection,
+            best_score_fallback=best_score,
+        )
+
+    def _build_result_dict(
+        self,
+        feedback: t.Optional[InjectionFeedback],
+        result: t.Optional[AggregatedResult],
+        generated_text: str,
+        injection_successful: bool,
+        runtime_seconds: float,
+        max_depth_reached: int,
+        nodes_evaluated: int,
+        multi_sample_mode: bool,
+        best_injection_fallback: str = "",
+        best_score_fallback: float = 0.0,
+    ) -> t.Dict[str, t.Any]:
+        """Build the result dictionary for run_attack.
+
+        Handles both single-sample and multi-sample modes.
+        """
+        # Get best injection/prefix/suffix from feedback or fallbacks
+        if feedback is not None:
+            if feedback.is_multi_sample:
+                best_injection = f"{feedback.prefix}{{attacker_goal}}{feedback.suffix}"
+                best_prefix = feedback.prefix
+                best_suffix = feedback.suffix
+            else:
+                best_injection = feedback.injection_string
+                best_prefix = ""
+                best_suffix = ""
+            best_score = result.aggregated_score if result else best_score_fallback
+        else:
+            best_injection = best_injection_fallback
+            best_prefix = ""
+            best_suffix = ""
+            best_score = best_score_fallback
+
+        # Build base result dict
+        result_dict = {
             "best_injection": best_injection,
             "best_score": best_score,
             "generated_text": generated_text,
-            "injection_successful": False,
+            "injection_successful": injection_successful,
             "runtime_seconds": runtime_seconds,
             "max_depth_reached": max_depth_reached,
             "nodes_evaluated": nodes_evaluated,
             "request_counts": self.request_counts.copy(),
         }
+
+        # Add multi-sample specific fields
+        if multi_sample_mode:
+            result_dict["prefix"] = best_prefix
+            result_dict["suffix"] = best_suffix
+
+        return result_dict
 
     # Helper methods
 
@@ -779,7 +899,11 @@ Generate your first injection attempt."""
     def _parse_injection_feedback(
         self, response_content: str
     ) -> t.Optional[InjectionFeedback]:
-        """Parse JSON feedback from attacker model response."""
+        """Parse JSON feedback from attacker model response.
+
+        Handles both single-sample format (injection_string) and
+        multi-sample format (prefix/suffix).
+        """
         try:
             # Try to parse the entire response as JSON first
             data = json.loads(response_content)
@@ -793,6 +917,17 @@ Generate your first injection attempt."""
         if not isinstance(data, dict):
             return None
 
+        # Check for multi-sample format (prefix/suffix)
+        if "prefix" in data:
+            return InjectionFeedback(
+                prefix=str(data["prefix"]),
+                suffix=str(data.get("suffix", "")),
+                improvement=str(
+                    data.get("improvement", "No improvement analysis provided")
+                ),
+            )
+
+        # Single-sample format (injection_string)
         if "injection_string" not in data:
             return None
 
@@ -805,7 +940,16 @@ Generate your first injection attempt."""
         )
 
     def _extract_json_from_response(self, response_content: str) -> t.Optional[dict]:
-        """Extract JSON object from response using multiple strategies."""
+        """Extract JSON object from response using multiple strategies.
+
+        Looks for both single-sample format (injection_string) and
+        multi-sample format (prefix/suffix).
+        """
+
+        def _has_valid_fields(data: dict) -> bool:
+            """Check if data has the required fields for either format."""
+            return "injection_string" in data or "prefix" in data
+
         # Strategy 1: Find JSON blocks with balanced braces
         json_candidates = self._find_json_blocks(response_content)
 
@@ -813,7 +957,7 @@ Generate your first injection attempt."""
             try:
                 data = json.loads(candidate)
                 # Check if it has the fields we need
-                if isinstance(data, dict) and "injection_string" in data:
+                if isinstance(data, dict) and _has_valid_fields(data):
                     return data
             except json.JSONDecodeError:
                 continue
@@ -825,7 +969,7 @@ Generate your first injection attempt."""
         for block in code_blocks:
             try:
                 data = json.loads(block.strip())
-                if isinstance(data, dict) and "injection_string" in data:
+                if isinstance(data, dict) and _has_valid_fields(data):
                     return data
             except json.JSONDecodeError:
                 continue
@@ -838,6 +982,7 @@ Generate your first injection attempt."""
                 re.IGNORECASE | re.DOTALL,
             ),
             (r'(\{[^{}]*"injection_string"[^{}]*"improvement"[^{}]*\})', re.DOTALL),
+            (r'(\{[^{}]*"prefix"[^{}]*"suffix"[^{}]*\})', re.DOTALL),
             (r"JSON:\s*(\{.*\})", re.DOTALL),
         ]
 
@@ -849,7 +994,7 @@ Generate your first injection attempt."""
                 for block in json_blocks:
                     try:
                         data = json.loads(block)
-                        if isinstance(data, dict) and "injection_string" in data:
+                        if isinstance(data, dict) and _has_valid_fields(data):
                             return data
                     except json.JSONDecodeError:
                         continue
@@ -1038,6 +1183,7 @@ Generate your first injection attempt."""
         3. Adding attacker's response (the injection JSON)
 
         This ensures each node's conversation contains the full path from root.
+        Handles both single-sample (injection_string) and multi-sample (prefix/suffix) formats.
         """
         # Copy parent's conversation (the full ancestry)
         new_conversation = list(parent.conversation)
@@ -1047,18 +1193,31 @@ Generate your first injection attempt."""
             feedback_user_msg = Message(
                 role=Role.user,
                 content=get_feedback_prompt(
-                    parent.aggregated_result, self.config.training_examples
+                    parent.aggregated_result,
+                    self.config.training_examples,
+                    prefix=parent.aggregated_result.prefix,
+                    suffix=parent.aggregated_result.suffix,
                 ),
             )
             new_conversation.append(feedback_user_msg)
 
         # Add the attacker's response (the injection feedback)
-        attacker_response = json.dumps(
-            {
-                "injection_string": feedback.injection_string,
-                "improvement": feedback.improvement,
-            }
-        )
+        # Use appropriate format based on single/multi-sample mode
+        if feedback.is_multi_sample:
+            attacker_response = json.dumps(
+                {
+                    "prefix": feedback.prefix,
+                    "suffix": feedback.suffix,
+                    "improvement": feedback.improvement,
+                }
+            )
+        else:
+            attacker_response = json.dumps(
+                {
+                    "injection_string": feedback.injection_string,
+                    "improvement": feedback.improvement,
+                }
+            )
         new_conversation.append(Message(role=Role.assistant, content=attacker_response))
 
         # Create the child node
