@@ -77,9 +77,13 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
         )
 
         if self.config.debug:
-            print(f"\n    [DEBUG] Target request ({len(messages)} messages, {len(tools)} tools):")
+            print(
+                f"\n    [DEBUG] Target request ({len(messages)} messages, {len(tools)} tools):"
+            )
             for msg in messages:
-                content_preview = msg.content[:200] + "..." if len(msg.content) > 200 else msg.content
+                content_preview = (
+                    msg.content[:200] + "..." if len(msg.content) > 200 else msg.content
+                )
                 print(f"      {msg.role.value}: {content_preview}")
 
         # Call the raw function with tools
@@ -94,18 +98,24 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
         if isinstance(result, tuple):
             message, tool_calls = result
             if self.config.debug:
-                print(f"    [DEBUG] Target response: {message.content[:200] if message.content else 'None'}...")
+                print(
+                    f"    [DEBUG] Target response: {message.content[:200] if message.content else 'None'}..."
+                )
                 print(f"    [DEBUG] Target tool_calls: {tool_calls}")
             return message.content, tool_calls
         else:
             # Check if the result has tool_calls attribute
             if hasattr(result, "tool_calls") and result.tool_calls:
                 if self.config.debug:
-                    print(f"    [DEBUG] Target response: {result.content[:200] if result.content else 'None'}...")
+                    print(
+                        f"    [DEBUG] Target response: {result.content[:200] if result.content else 'None'}..."
+                    )
                     print(f"    [DEBUG] Target tool_calls: {result.tool_calls}")
                 return result.content, result.tool_calls
             if self.config.debug:
-                print(f"    [DEBUG] Target response: {result.content[:200] if result.content else 'None'}...")
+                print(
+                    f"    [DEBUG] Target response: {result.content[:200] if result.content else 'None'}..."
+                )
                 print(f"    [DEBUG] Target tool_calls: []")
             return result.content, []
 
@@ -145,26 +155,38 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
                 if self.config.debug:
                     print(f"\n    [DEBUG] Attacker request ({len(messages)} messages):")
                     for msg in messages:
-                        content_preview = msg.content[:200] + "..." if len(msg.content) > 200 else msg.content
+                        content_preview = (
+                            msg.content[:200] + "..."
+                            if len(msg.content) > 200
+                            else msg.content
+                        )
                         print(f"      {msg.role.value}: {content_preview}")
 
                 response = self.attacker_chat(messages)
 
                 if self.config.debug:
                     if response.content:
-                        print(f"    [DEBUG] Attacker response: {response.content[:300]}...")
+                        print(
+                            f"    [DEBUG] Attacker response: {response.content[:300]}..."
+                        )
                     else:
-                        print(f"    [DEBUG] Attacker response is EMPTY (content={repr(response.content)})")
+                        print(
+                            f"    [DEBUG] Attacker response is EMPTY (content={repr(response.content)})"
+                        )
 
                 # Parse JSON response
                 feedback = self._parse_injection_feedback(response.content)
                 if feedback:
                     candidates.append(feedback)
                     if self.config.debug:
-                        print(f"    [DEBUG] Parsed candidate: {feedback.injection_string[:100]}...")
+                        print(
+                            f"    [DEBUG] Parsed candidate: {feedback.injection_string[:100]}..."
+                        )
                 else:
                     if self.config.debug:
-                        print(f"    [DEBUG] Failed to parse attacker response:\n{response.content}\n---END RESPONSE---")
+                        print(
+                            f"    [DEBUG] Failed to parse attacker response:\n{response.content}\n---END RESPONSE---"
+                        )
 
             except Exception as e:
                 if self.config.debug:
@@ -172,7 +194,9 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
                 continue
 
         if self.config.debug:
-            print(f"    [DEBUG] Generated {len(candidates)} valid candidates from {self.config.branching_factor} attempts")
+            print(
+                f"    [DEBUG] Generated {len(candidates)} valid candidates from {self.config.branching_factor} attempts"
+            )
 
         return candidates
 
@@ -189,7 +213,9 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
         individual_results = []
 
         if self.config.debug:
-            print(f"    [DEBUG] Evaluating injection against {len(self.config.training_examples)} examples")
+            print(
+                f"    [DEBUG] Evaluating injection against {len(self.config.training_examples)} examples"
+            )
 
         for example in self.config.training_examples:
             try:
@@ -203,7 +229,9 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
 
                 for trial in range(self.config.reliability_trials):
                     if self.config.debug:
-                        print(f"    [DEBUG] Trial {trial + 1}/{self.config.reliability_trials}...")
+                        print(
+                            f"    [DEBUG] Trial {trial + 1}/{self.config.reliability_trials}..."
+                        )
                     # Create test conversation with injection inserted
                     test_conversation = self._insert_injection(
                         example, injection_string
@@ -226,7 +254,9 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
 
                     if self.config.debug:
                         print(f"    [DEBUG] Trial {trial + 1}:")
-                        print(f"      Target response content: {repr(response_content[:200]) if response_content else 'EMPTY'}")
+                        print(
+                            f"      Target response content: {repr(response_content[:200]) if response_content else 'EMPTY'}"
+                        )
                         print(f"      Target tool_calls: {tool_calls}")
                         print(f"      Evaluator score: {score:.2f}")
 
@@ -270,8 +300,11 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
 
             except Exception as e:
                 if self.config.debug:
-                    print(f"    [DEBUG] Exception during evaluation of example {example.example_id}: {e}")
+                    print(
+                        f"    [DEBUG] Exception during evaluation of example {example.example_id}: {e}"
+                    )
                     import traceback
+
                     traceback.print_exc()
                 raise
 
@@ -344,7 +377,7 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
         current_nodes = root_nodes
 
         # Tracking variables
-        best_injection = None
+        best_injection = ""
         best_score = 0.0
         best_result: t.Optional[AggregatedResult] = None
         nodes_evaluated = 0
@@ -890,15 +923,25 @@ Generate your first injection attempt."""
             print("ERROR: no injection point found!")
 
         if self.config.debug:
-            print(f"    [DEBUG] Conversation structure ({len(test_conversation)} messages):")
+            print(
+                f"    [DEBUG] Conversation structure ({len(test_conversation)} messages):"
+            )
             for i, msg in enumerate(test_conversation):
                 tool_calls_info = ""
                 if msg.tool_calls:
                     tool_call_ids = [tc.get("id", "?") for tc in msg.tool_calls]
                     tool_calls_info = f" [tool_calls: {tool_call_ids}]"
-                tool_call_id_info = f" [tool_call_id: {msg.tool_call_id}]" if msg.tool_call_id else ""
-                content_preview = (msg.content[:50] + "...") if msg.content and len(msg.content) > 50 else msg.content
-                print(f"      {i}: {msg.role.value}{tool_calls_info}{tool_call_id_info} - {content_preview}")
+                tool_call_id_info = (
+                    f" [tool_call_id: {msg.tool_call_id}]" if msg.tool_call_id else ""
+                )
+                content_preview = (
+                    (msg.content[:50] + "...")
+                    if msg.content and len(msg.content) > 50
+                    else msg.content
+                )
+                print(
+                    f"      {i}: {msg.role.value}{tool_calls_info}{tool_call_id_info} - {content_preview}"
+                )
 
         return test_conversation
 
