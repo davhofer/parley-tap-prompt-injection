@@ -21,6 +21,14 @@ class TrialAggregationStrategy(str, Enum):
     MEAN = "mean"  # Take the average score across trials
 
 
+class SampleAggregationStrategy(str, Enum):
+    """Methods for aggregating scores across multiple samples (multi-sample mode)."""
+
+    MEAN = "mean"  # Take the average score across all samples
+    MIN = "min"  # Take the minimum score (all samples must succeed)
+    SUCCESS_RATE = "success_rate"  # Percentage of samples above individual threshold
+
+
 class TrainingExample(BaseModel):
     """
     A single training example for prompt injection attacks.
@@ -148,7 +156,13 @@ class InjectionConfig(BaseModel):
     training_examples: t.List[TrainingExample]
 
     # Evaluation settings
-    success_threshold: float = 0.8  # Score threshold for stopping
+    success_threshold: float = 0.8  # Score threshold for stopping (aggregated score)
+
+    # Multi-sample aggregation settings
+    sample_aggregation_strategy: SampleAggregationStrategy = SampleAggregationStrategy.MEAN
+    # For SUCCESS_RATE strategy:
+    sample_success_threshold: float = 0.7  # Individual sample must score above this to count as "success"
+    required_success_rate: float = 0.8  # Fraction of samples that must succeed (0.0-1.0)
 
     # Reliability testing parameters
     reliability_trials: int = 1  # Number of times to test each injection

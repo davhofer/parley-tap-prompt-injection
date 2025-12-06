@@ -4,6 +4,8 @@ from .types import Message, Role, Parameters, ChatFunction
 from .injection_types import (
     TrainingExample,
     InjectionConfig,
+    TrialAggregationStrategy,
+    SampleAggregationStrategy,
 )
 from .models import chat_openai, chat_together
 
@@ -14,6 +16,8 @@ __all__ = [
     "ChatFunction",
     "TrainingExample",
     "InjectionConfig",
+    "TrialAggregationStrategy",
+    "SampleAggregationStrategy",
     "chat_openai",
     "chat_together",
 ]
