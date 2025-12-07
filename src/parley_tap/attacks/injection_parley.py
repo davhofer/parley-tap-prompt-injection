@@ -26,7 +26,6 @@ from ..core.injection_types import (
     InjectionConfig,
     InjectionAttackFramework,
     TrialAggregationStrategy,
-    SampleAggregationStrategy,
 )
 from ..prompts.injection_prompts import (
     get_prompt_for_injection_evaluator_score,
@@ -334,8 +333,10 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
                     traceback.print_exc()
                 raise
 
-        # Aggregate scores across all examples
+        # Aggregate scores across all examples (mean for ranking)
         aggregated_score = self._aggregate_scores(individual_results)
+        # Compute success rate (for early stopping)
+        success_rate = self._compute_success_rate(individual_results)
 
         # For display, use first injection or construct a representative string
         if multi_sample_mode:
@@ -347,8 +348,7 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
             injection_string=display_injection,
             individual_results=individual_results,
             aggregated_score=aggregated_score,
-            success_rate=sum(1 for r in individual_results if r.success_score > 0.5)
-            / len(individual_results),
+            success_rate=success_rate,
             total_examples=len(individual_results),
             prefix=feedback.prefix,
             suffix=feedback.suffix,
@@ -422,14 +422,9 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
             print(f" |- Multi-sample optimization mode (PREFIX/SUFFIX)")
             print(f" |- Training on {len(self.config.training_examples)} examples")
             print(f" |- Target goals: {self._get_all_attacker_goals()}")
-            # Show aggregation strategy info
-            strategy = self.config.sample_aggregation_strategy
-            print(f" |- Aggregation strategy: {strategy.value}")
-            if strategy == SampleAggregationStrategy.SUCCESS_RATE:
-                print(f" |- Sample success threshold: {self.config.sample_success_threshold}")
-                print(f" |- Required success rate: {self.config.required_success_rate:.0%}")
-            else:
-                print(f" |- Success threshold: {self.config.success_threshold}")
+            # Show scoring and stopping criteria
+            print(f" |- Ranking metric: mean score across samples")
+            print(f" |- Early stopping: {self.config.required_success_rate:.0%} of samples must score >= {self.config.sample_success_threshold}")
 
         # Initialize root nodes with attacker system prompt
         root_nodes = self._initialize_root_nodes()
@@ -483,7 +478,7 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
                             print(f"      Score: {result.aggregated_score:.2f}")
                         else:
                             print(
-                                f"      Score: {result.aggregated_score:.2f}, Success rate: {result.success_rate:.2%}"
+                                f"      Mean score: {result.aggregated_score:.2f}, Success rate: {result.success_rate:.0%} ({int(result.success_rate * result.total_examples)}/{result.total_examples})"
                             )
 
                     # Track best injection found so far
@@ -501,13 +496,14 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
                             best_suffix = ""
 
                     # Check if we've reached success threshold
-                    # For SUCCESS_RATE strategy, compare against required_success_rate
-                    stopping_threshold = (
-                        self.config.required_success_rate
-                        if self.config.sample_aggregation_strategy == SampleAggregationStrategy.SUCCESS_RATE
-                        else self.config.success_threshold
-                    )
-                    if result.aggregated_score >= stopping_threshold:
+                    # For multi-sample mode, use success_rate vs required_success_rate
+                    # For single-sample mode, use aggregated_score vs success_threshold
+                    if multi_sample_mode:
+                        should_stop = result.success_rate >= self.config.required_success_rate
+                    else:
+                        should_stop = result.aggregated_score >= self.config.success_threshold
+
+                    if should_stop:
                         runtime_seconds = time.time() - start_time
                         # Extract generated text from first individual result
                         generated_text = ""
@@ -519,7 +515,9 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
                         print(f" |- Runtime:         {runtime_seconds:.2f}s")
                         print(f" |- Max depth:       {max_depth_reached}")
                         print(f" |- Nodes evaluated: {nodes_evaluated}")
-                        print(f" |- Best score:      {result.aggregated_score:.2f}")
+                        print(f" |- Mean score:      {result.aggregated_score:.2f}")
+                        if multi_sample_mode:
+                            print(f" |- Success rate:    {result.success_rate:.0%} ({int(result.success_rate * result.total_examples)}/{result.total_examples} samples)")
                         print(f"\n[+] API Request Summary:")
                         print(
                             f" |- Target model:    {self.request_counts['target']} requests"
@@ -567,7 +565,9 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
         print(f" |- Runtime:         {runtime_seconds:.2f}s")
         print(f" |- Max depth:       {max_depth_reached}")
         print(f" |- Nodes evaluated: {nodes_evaluated}")
-        print(f" |- Best score:      {best_score:.2f}")
+        print(f" |- Best mean score: {best_score:.2f}")
+        if multi_sample_mode and best_result:
+            print(f" |- Best success rate: {best_result.success_rate:.0%} ({int(best_result.success_rate * best_result.total_examples)}/{best_result.total_examples} samples)")
         print(f"\n[+] API Request Summary:")
         print(f" |- Target model:    {self.request_counts['target']} requests")
         print(f" |- Evaluator model: {self.request_counts['evaluator']} requests")
@@ -1142,31 +1142,29 @@ Generate your first injection attempt."""
         return unique_tools
 
     def _aggregate_scores(self, results: t.List[InjectionResult]) -> float:
-        """Aggregate individual example scores based on configured strategy.
+        """Aggregate individual example scores by computing the mean.
 
-        Strategies:
-        - MEAN: Average of all scores (default)
-        - MIN: Minimum score across all samples
-        - SUCCESS_RATE: Fraction of samples above sample_success_threshold
+        This score is used for ranking injections and pruning the search tree.
+        For early stopping, use _compute_success_rate() instead.
         """
         if not results:
             return 0.0
 
         scores = [result.success_score for result in results]
-        strategy = self.config.sample_aggregation_strategy
+        return sum(scores) / len(scores)
 
-        if strategy == SampleAggregationStrategy.MEAN:
-            return sum(scores) / len(scores)
-        elif strategy == SampleAggregationStrategy.MIN:
-            return min(scores)
-        elif strategy == SampleAggregationStrategy.SUCCESS_RATE:
-            # Count how many samples are above the individual success threshold
-            threshold = self.config.sample_success_threshold
-            successes = sum(1 for s in scores if s >= threshold)
-            return successes / len(scores)
-        else:
-            # Fallback to mean
-            return sum(scores) / len(scores)
+    def _compute_success_rate(self, results: t.List[InjectionResult]) -> float:
+        """Compute fraction of samples that succeeded (score >= sample_success_threshold).
+
+        This is used for early stopping in multi-sample mode.
+        """
+        if not results:
+            return 0.0
+
+        threshold = self.config.sample_success_threshold
+        scores = [result.success_score for result in results]
+        successes = sum(1 for s in scores if s >= threshold)
+        return successes / len(scores)
 
     def _initialize_root_nodes(self) -> t.List[InjectionTreeNode]:
         """Initialize root nodes for tree search.
