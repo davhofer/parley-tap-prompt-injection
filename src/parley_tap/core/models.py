@@ -48,14 +48,6 @@ def _chat_openai(
     except Exception as e:
         # Debug: print request details on error
         print(f"\n[DEBUG] OpenAI API Error: {e}")
-        print(f"[DEBUG] Model: {parameters.model}")
-        print(f"[DEBUG] Number of messages: {len(messages)}")
-        print(f"[DEBUG] Message types: {[type(m).__name__ for m in messages]}")
-        if messages:
-            print(f"[DEBUG] First message: {messages[0]}")
-            if len(messages) > 1:
-                print(f"[DEBUG] Last message: {messages[-1]}")
-        print(f"[DEBUG] Request params (excluding messages): { {k: v for k, v in request_params.items() if k != 'messages'} }")
         raise
 
     response_message = response.choices[0].message
@@ -102,15 +94,18 @@ def _chat_openai(
 def chat_openai(
     messages: t.List[Message], parameters: Parameters
 ) -> t.Union[Message, t.Tuple[Message, t.List[t.Dict[str, t.Any]]]]:
-    return _chat_openai(OpenAI(), messages, parameters)
+    # Disable SDK's internal retry - let our custom retry logic handle it
+    return _chat_openai(OpenAI(max_retries=0), messages, parameters)
 
 
 def chat_together(
     messages: t.List[Message], parameters: Parameters
 ) -> t.Union[Message, t.Tuple[Message, t.List[t.Dict[str, t.Any]]]]:
+    # Disable SDK's internal retry - let our custom retry logic handle it
     client = openai.OpenAI(
         api_key=os.environ["TOGETHER_API_KEY"],
         base_url="https://api.together.xyz/v1",
+        max_retries=0,
     )
 
     return _chat_openai(client, messages, parameters)
@@ -125,9 +120,11 @@ def chat_vllm(
         "VLLM_API_KEY", "dummy"
     )  # vLLM doesn't require auth by default
 
+    # Disable SDK's internal retry - let our custom retry logic handle it
     client = openai.OpenAI(
         api_key=api_key,
         base_url=base_url,
+        max_retries=0,
     )
 
     return _chat_openai(client, messages, parameters)

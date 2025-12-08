@@ -179,6 +179,15 @@ class InjectionConfig(BaseModel):
     width: int = 10
     depth: int = 10
 
+    # Parallelization settings
+    max_parallel_workers: int = 1  # Max concurrent workers for sample evaluation (1 = sequential)
+
+    # Retry settings for API calls
+    max_retries: int = 5  # Maximum number of retry attempts
+    retry_initial_delay: float = 1.0  # Initial delay in seconds before first retry
+    retry_max_delay: float = 60.0  # Maximum delay between retries
+    retry_backoff_multiplier: float = 2.0  # Multiplier for exponential backoff
+
     # Debug flag
     debug: bool = False
 

@@ -14,6 +14,9 @@ import time
 import typing as t
 import re
 import json
+import random
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ..core.types import ChatFunction, Message, Role, Parameters, Tool, ToolFunction
 from ..core.models import Models, load_models
@@ -56,14 +59,135 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
         self._raw_target_func = target_chat.func
         self._target_params = target_chat.keywords["parameters"]
 
-        # Request counting
+        # Request counting (thread-safe)
         self.request_counts = {"target": 0, "evaluator": 0, "attacker": 0}
+        self._request_counts_lock = threading.Lock()
+
+    def _increment_request_count(self, model_type: str, count: int = 1) -> None:
+        """Thread-safe increment of request counts."""
+        with self._request_counts_lock:
+            self.request_counts[model_type] += count
+
+    def _is_retryable_error(self, exception: Exception) -> bool:
+        """Check if an exception is retryable (rate limit, timeout, transient server error)."""
+        error_str = str(exception).lower()
+        exception_type = type(exception).__name__.lower()
+
+        # Common retryable error patterns
+        retryable_patterns = [
+            "rate limit",
+            "rate_limit",
+            "ratelimit",
+            "too many requests",
+            "429",  # HTTP 429 Too Many Requests
+            "timeout",
+            "timed out",
+            "connection error",
+            "connection reset",
+            "connection refused",
+            "connect error",
+            "server error",
+            "500",  # HTTP 500 Internal Server Error
+            "502",  # HTTP 502 Bad Gateway
+            "503",  # HTTP 503 Service Unavailable
+            "504",  # HTTP 504 Gateway Timeout
+            "overloaded",
+            "capacity",
+            "temporarily unavailable",
+            "apiconnectionerror",
+            "connecterror",
+        ]
+
+        # Check exception type name
+        retryable_types = [
+            "ratelimit",
+            "timeout",
+            "connection",
+            "connect",
+            "server",
+            "apiconnection",
+        ]
+
+        for pattern in retryable_patterns:
+            if pattern in error_str:
+                return True
+
+        for rtype in retryable_types:
+            if rtype in exception_type:
+                return True
+
+        return False
+
+    def _call_with_retry(
+        self,
+        func: t.Callable[..., t.Any],
+        *args,
+        operation_name: str = "API call",
+        **kwargs,
+    ) -> t.Any:
+        """
+        Call a function with retry logic and exponential backoff.
+
+        Args:
+            func: The function to call
+            *args: Positional arguments to pass to the function
+            operation_name: Name of the operation for logging
+            **kwargs: Keyword arguments to pass to the function
+
+        Returns:
+            The result of the function call
+
+        Raises:
+            The last exception if all retries are exhausted
+        """
+        last_exception = None
+        delay = self.config.retry_initial_delay
+
+        for attempt in range(self.config.max_retries + 1):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                last_exception = e
+
+                # Check if this error is retryable
+                if not self._is_retryable_error(e):
+                    if self.config.debug:
+                        print(f"    [DEBUG] Non-retryable error in {operation_name}: {e}")
+                    raise
+
+                # Check if we have retries left
+                if attempt >= self.config.max_retries:
+                    if self.config.debug:
+                        print(
+                            f"    [DEBUG] {operation_name} failed after {self.config.max_retries} retries: {e}"
+                        )
+                    raise
+
+                # Add jitter to prevent thundering herd
+                jittered_delay = delay * (0.5 + random.random())
+
+                if self.config.debug:
+                    print(
+                        f"    [DEBUG] {operation_name} failed (attempt {attempt + 1}/{self.config.max_retries + 1}): {e}"
+                    )
+                    print(f"    [DEBUG] Retrying in {jittered_delay:.2f}s...")
+
+                time.sleep(jittered_delay)
+
+                # Increase delay for next retry (exponential backoff)
+                delay = min(
+                    delay * self.config.retry_backoff_multiplier,
+                    self.config.retry_max_delay,
+                )
+
+        # Should never reach here, but just in case
+        raise last_exception
 
     def _call_target_with_tools(
         self, messages: t.List[Message], tools: t.List[Tool]
     ) -> t.Tuple[str, t.List[t.Dict[str, t.Any]]]:
         """Call target model with specific tools enabled."""
-        self.request_counts["target"] += 1
+        self._increment_request_count("target")
 
         # Create parameters with tools
         params = Parameters(
@@ -85,13 +209,13 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
                 )
                 print(f"      {msg.role.value}: {content_preview}")
 
-        # Call the raw function with tools
-        try:
-            result = self._raw_target_func(messages=messages, parameters=params)
-        except Exception as e:
-            if self.config.debug:
-                print(f"    [DEBUG] Target error: {e}")
-            raise
+        # Call the raw function with tools (with retry)
+        result = self._call_with_retry(
+            self._raw_target_func,
+            messages=messages,
+            parameters=params,
+            operation_name="Target model call",
+        )
 
         # Handle the response - could be just a Message or (Message, tool_calls)
         if isinstance(result, tuple):
@@ -153,7 +277,7 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
         for _ in range(self.config.branching_factor):
             try:
                 # Call attacker model with full conversation history
-                self.request_counts["attacker"] += 1
+                self._increment_request_count("attacker")
 
                 if self.config.debug:
                     print(f"\n    [DEBUG] Attacker request ({len(messages)} messages):")
@@ -165,7 +289,11 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
                         )
                         print(f"      {msg.role.value}: {content_preview}")
 
-                response = self.attacker_chat(messages)
+                response = self._call_with_retry(
+                    self.attacker_chat,
+                    messages,
+                    operation_name="Attacker model call",
+                )
 
                 # Check for model refusal
                 refusal_keywords = [
@@ -231,6 +359,101 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
 
         return candidates
 
+    def _evaluate_single_example(
+        self,
+        example: TrainingExample,
+        feedback: InjectionFeedback,
+        multi_sample_mode: bool,
+    ) -> InjectionResult:
+        """
+        Evaluate a single training example with the given injection feedback.
+
+        This helper method is designed to be called either sequentially or in parallel.
+        It handles all trials for a single example and returns an InjectionResult.
+        """
+        # Get the injection string for this specific example
+        injection_string = feedback.get_injection_for_goal(example.attacker_goal)
+
+        if self.config.debug:
+            print(f"    [DEBUG] Evaluating example {example.example_id}...")
+            if multi_sample_mode:
+                print(
+                    f"    [DEBUG] Constructed injection: '{injection_string[:100]}...'"
+                )
+
+        # Run multiple trials for reliability testing
+        trial_scores = []
+        trial_tool_calls = []
+        trial_responses = []
+
+        for trial in range(self.config.reliability_trials):
+            if self.config.debug:
+                print(
+                    f"    [DEBUG] Trial {trial + 1}/{self.config.reliability_trials}..."
+                )
+            # Create test conversation with injection inserted
+            test_conversation = self._insert_injection(example, injection_string)
+
+            # Get target model response with tools enabled
+            response_content, tool_calls = self._call_target_with_tools(
+                test_conversation, example.available_tools
+            )
+
+            # Use LLM evaluator to score the injection
+            score = self._evaluate_injection_response(
+                injection_string=injection_string,
+                response=response_content,
+                attacker_goal=example.attacker_goal,
+                target_tools=example.target_tool_calls,
+                actual_tool_calls=tool_calls,
+                user_task_context=example.user_task_context,
+            )
+
+            if self.config.debug:
+                print(f"    [DEBUG] Trial {trial + 1}:")
+                print(
+                    f"      Target response content: {repr(response_content[:200]) if response_content else 'EMPTY'}"
+                )
+                print(f"      Target tool_calls: {tool_calls}")
+                print(f"      Evaluator score: {score:.2f}")
+
+            trial_scores.append(score)
+            trial_tool_calls.append(tool_calls)
+            trial_responses.append(response_content)
+
+        # Aggregate trial scores based on configured strategy
+        if (
+            self.config.trial_aggregation_strategy
+            == TrialAggregationStrategy.BEST
+        ):
+            sample_score = max(trial_scores)
+        else:  # MEAN
+            sample_score = sum(trial_scores) / len(trial_scores)
+
+        # Use the best trial for display (highest scoring)
+        best_trial_idx = trial_scores.index(max(trial_scores))
+        best_response = trial_responses[best_trial_idx]
+        best_tool_calls = trial_tool_calls[best_trial_idx]
+
+        # Extract tool call info for logging (from best trial)
+        triggered_tool_info = []
+        for tc in best_tool_calls:
+            if "function" in tc:
+                name = tc["function"].get("name", "unknown")
+                args = tc["function"].get("arguments", {})
+                triggered_tool_info.append(f"{name}({json.dumps(args)})")
+
+        # Return individual result with trial data
+        return InjectionResult(
+            example_id=example.example_id,
+            injection_string=injection_string,
+            triggered_tools=triggered_tool_info,
+            raw_response=best_response,
+            success_score=sample_score,
+            parsing_successful=True,
+            trial_results=trial_scores,
+        )
+
     def evaluate_injection_feedback(
         self, feedback: InjectionFeedback
     ) -> AggregatedResult:
@@ -246,8 +469,9 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
         3. Get target model response with tool calls (multiple trials if configured)
         4. Extract and score tool call success across trials
         5. Aggregate scores across all examples
+
+        When max_parallel_workers > 1, evaluates examples in parallel using ThreadPoolExecutor.
         """
-        individual_results = []
         multi_sample_mode = feedback.is_multi_sample
 
         if self.config.debug:
@@ -258,106 +482,22 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
                 print(
                     f"    [DEBUG] Multi-sample mode: prefix='{feedback.prefix[:50]}...', suffix='{feedback.suffix[:50] if feedback.suffix else ''}'"
                 )
-
-        for example in self.config.training_examples:
-            try:
-                # Get the injection string for this specific example
-                injection_string = feedback.get_injection_for_goal(
-                    example.attacker_goal
+            if self.config.max_parallel_workers > 1:
+                print(
+                    f"    [DEBUG] Using parallel evaluation with {self.config.max_parallel_workers} workers"
                 )
 
-                if self.config.debug:
-                    print(f"    [DEBUG] Evaluating example {example.example_id}...")
-                    if multi_sample_mode:
-                        print(
-                            f"    [DEBUG] Constructed injection: '{injection_string[:100]}...'"
-                        )
-
-                # Run multiple trials for reliability testing
-                trial_scores = []
-                trial_tool_calls = []
-                trial_responses = []
-
-                for trial in range(self.config.reliability_trials):
-                    if self.config.debug:
-                        print(
-                            f"    [DEBUG] Trial {trial + 1}/{self.config.reliability_trials}..."
-                        )
-                    # Create test conversation with injection inserted
-                    test_conversation = self._insert_injection(
-                        example, injection_string
-                    )
-
-                    # Get target model response with tools enabled
-                    response_content, tool_calls = self._call_target_with_tools(
-                        test_conversation, example.available_tools
-                    )
-
-                    # Use LLM evaluator to score the injection
-                    score = self._evaluate_injection_response(
-                        injection_string=injection_string,
-                        response=response_content,
-                        attacker_goal=example.attacker_goal,
-                        target_tools=example.target_tool_calls,
-                        actual_tool_calls=tool_calls,
-                        user_task_context=example.user_task_context,
-                    )
-
-                    if self.config.debug:
-                        print(f"    [DEBUG] Trial {trial + 1}:")
-                        print(
-                            f"      Target response content: {repr(response_content[:200]) if response_content else 'EMPTY'}"
-                        )
-                        print(f"      Target tool_calls: {tool_calls}")
-                        print(f"      Evaluator score: {score:.2f}")
-
-                    trial_scores.append(score)
-                    trial_tool_calls.append(tool_calls)
-                    trial_responses.append(response_content)
-
-                # Aggregate trial scores based on configured strategy
-                if (
-                    self.config.trial_aggregation_strategy
-                    == TrialAggregationStrategy.BEST
-                ):
-                    sample_score = max(trial_scores)
-                else:  # MEAN
-                    sample_score = sum(trial_scores) / len(trial_scores)
-
-                # Use the best trial for display (highest scoring)
-                best_trial_idx = trial_scores.index(max(trial_scores))
-                best_response = trial_responses[best_trial_idx]
-                best_tool_calls = trial_tool_calls[best_trial_idx]
-
-                # Extract tool call info for logging (from best trial)
-                triggered_tool_info = []
-                for tc in best_tool_calls:
-                    if "function" in tc:
-                        name = tc["function"].get("name", "unknown")
-                        args = tc["function"].get("arguments", {})
-                        triggered_tool_info.append(f"{name}({json.dumps(args)})")
-
-                # Store individual result with trial data
-                result = InjectionResult(
-                    example_id=example.example_id,
-                    injection_string=injection_string,
-                    triggered_tools=triggered_tool_info,
-                    raw_response=best_response,
-                    success_score=sample_score,
-                    parsing_successful=True,
-                    trial_results=trial_scores,
-                )
-                individual_results.append(result)
-
-            except Exception as e:
-                if self.config.debug:
-                    print(
-                        f"    [DEBUG] Exception during evaluation of example {example.example_id}: {e}"
-                    )
-                    import traceback
-
-                    traceback.print_exc()
-                raise
+        # Decide whether to run in parallel or sequential
+        if self.config.max_parallel_workers > 1 and len(self.config.training_examples) > 1:
+            # Parallel evaluation using ThreadPoolExecutor
+            individual_results = self._evaluate_examples_parallel(
+                feedback, multi_sample_mode
+            )
+        else:
+            # Sequential evaluation (original behavior)
+            individual_results = self._evaluate_examples_sequential(
+                feedback, multi_sample_mode
+            )
 
         # Aggregate scores across all examples (mean for ranking)
         aggregated_score = self._aggregate_scores(individual_results)
@@ -380,6 +520,83 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
             suffix=feedback.suffix,
         )
 
+    def _evaluate_examples_sequential(
+        self, feedback: InjectionFeedback, multi_sample_mode: bool
+    ) -> t.List[InjectionResult]:
+        """Evaluate all examples sequentially (original behavior)."""
+        individual_results = []
+
+        for example in self.config.training_examples:
+            try:
+                result = self._evaluate_single_example(
+                    example, feedback, multi_sample_mode
+                )
+                individual_results.append(result)
+            except Exception as e:
+                if self.config.debug:
+                    print(
+                        f"    [DEBUG] Exception during evaluation of example {example.example_id}: {e}"
+                    )
+                    import traceback
+
+                    traceback.print_exc()
+                raise
+
+        return individual_results
+
+    def _evaluate_examples_parallel(
+        self, feedback: InjectionFeedback, multi_sample_mode: bool
+    ) -> t.List[InjectionResult]:
+        """Evaluate all examples in parallel using ThreadPoolExecutor."""
+        individual_results = []
+        exceptions = []
+
+        # Use min of max_parallel_workers and number of examples
+        num_workers = min(
+            self.config.max_parallel_workers,
+            len(self.config.training_examples)
+        )
+
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            # Submit all tasks
+            future_to_example = {
+                executor.submit(
+                    self._evaluate_single_example,
+                    example,
+                    feedback,
+                    multi_sample_mode,
+                ): example
+                for example in self.config.training_examples
+            }
+
+            # Collect results as they complete
+            for future in as_completed(future_to_example):
+                example = future_to_example[future]
+                try:
+                    result = future.result()
+                    individual_results.append(result)
+                except Exception as e:
+                    if self.config.debug:
+                        print(
+                            f"    [DEBUG] Exception during parallel evaluation of example {example.example_id}: {e}"
+                        )
+                        import traceback
+
+                        traceback.print_exc()
+                    exceptions.append((example.example_id, e))
+
+        # If any exceptions occurred, raise the first one
+        if exceptions:
+            example_id, exc = exceptions[0]
+            raise RuntimeError(
+                f"Exception during parallel evaluation of example {example_id}"
+            ) from exc
+
+        # Sort results by example_id to ensure consistent ordering
+        individual_results.sort(key=lambda r: r.example_id)
+
+        return individual_results
+
     def evaluate_injection_string(self, injection_string: str) -> AggregatedResult:
         """
         Test injection string against all training examples and aggregate results.
@@ -401,19 +618,22 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
         to trigger the target tool calls specified in training examples.
         """
         try:
-            self.request_counts["evaluator"] += 1
-            response = self.evaluator_chat(
-                [
-                    Message(
-                        role=Role.system,
-                        content=get_prompt_for_injection_evaluator_relevance(
-                            self.config.training_examples
-                        ),
+            self._increment_request_count("evaluator")
+            eval_messages = [
+                Message(
+                    role=Role.system,
+                    content=get_prompt_for_injection_evaluator_relevance(
+                        self.config.training_examples
                     ),
-                    Message(
-                        role=Role.user, content=f"Injection String: {injection_string}"
-                    ),
-                ]
+                ),
+                Message(
+                    role=Role.user, content=f"Injection String: {injection_string}"
+                ),
+            ]
+            response = self._call_with_retry(
+                self.evaluator_chat,
+                eval_messages,
+                operation_name="Evaluator relevance check",
             )
 
             # Parse yes/no response
@@ -1156,7 +1376,7 @@ Output a single integer from 1 to 10.
 """
 
             # Get evaluator score
-            self.request_counts["evaluator"] += 1
+            self._increment_request_count("evaluator")
             eval_messages = [
                 Message(
                     role=Role.system,
@@ -1170,7 +1390,11 @@ Output a single integer from 1 to 10.
                 print(f"      system: {eval_messages[0].content[:200]}...")
                 print(f"      user: {eval_messages[1].content[:300]}...")
 
-            score_response = self.evaluator_chat(eval_messages)
+            score_response = self._call_with_retry(
+                self.evaluator_chat,
+                eval_messages,
+                operation_name="Evaluator score call",
+            )
 
             if self.config.debug:
                 print(f"    [DEBUG] Evaluator response: {score_response.content}")
