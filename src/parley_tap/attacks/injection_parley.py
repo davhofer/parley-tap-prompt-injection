@@ -167,6 +167,26 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
 
                 response = self.attacker_chat(messages)
 
+                # Check for model refusal
+                refusal_keywords = [
+                    "REFUSE",
+                    "DECLINE",
+                    "I cannot",
+                    "I will not",
+                    "I'm not able to",
+                    "I can't help",
+                ]
+                if response.content:
+                    for keyword in refusal_keywords:
+                        if keyword.upper() in response.content.upper():
+                            print(
+                                f"\n    [WARNING] Attacker model appears to have REFUSED:"
+                            )
+                            print(f"    {'-' * 60}")
+                            print(f"    {response.content[:1000]}")
+                            print(f"    {'-' * 60}\n")
+                            break
+
                 if self.config.debug:
                     if response.content:
                         print(
@@ -235,17 +255,23 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
                 f"    [DEBUG] Evaluating injection against {len(self.config.training_examples)} examples"
             )
             if multi_sample_mode:
-                print(f"    [DEBUG] Multi-sample mode: prefix='{feedback.prefix[:50]}...', suffix='{feedback.suffix[:50] if feedback.suffix else ''}'")
+                print(
+                    f"    [DEBUG] Multi-sample mode: prefix='{feedback.prefix[:50]}...', suffix='{feedback.suffix[:50] if feedback.suffix else ''}'"
+                )
 
         for example in self.config.training_examples:
             try:
                 # Get the injection string for this specific example
-                injection_string = feedback.get_injection_for_goal(example.attacker_goal)
+                injection_string = feedback.get_injection_for_goal(
+                    example.attacker_goal
+                )
 
                 if self.config.debug:
                     print(f"    [DEBUG] Evaluating example {example.example_id}...")
                     if multi_sample_mode:
-                        print(f"    [DEBUG] Constructed injection: '{injection_string[:100]}...'")
+                        print(
+                            f"    [DEBUG] Constructed injection: '{injection_string[:100]}...'"
+                        )
 
                 # Run multiple trials for reliability testing
                 trial_scores = []
@@ -424,7 +450,9 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
             print(f" |- Target goals: {self._get_all_attacker_goals()}")
             # Show scoring and stopping criteria
             print(f" |- Ranking metric: mean score across samples")
-            print(f" |- Early stopping: {self.config.required_success_rate:.0%} of samples must score >= {self.config.sample_success_threshold}")
+            print(
+                f" |- Early stopping: {self.config.required_success_rate:.0%} of samples must score >= {self.config.sample_success_threshold}"
+            )
 
         # Initialize root nodes with attacker system prompt
         root_nodes = self._initialize_root_nodes()
@@ -459,9 +487,13 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
                     if self.config.debug:
                         if feedback.is_multi_sample:
                             print(f'    Testing PREFIX: "{feedback.prefix[:50]}..."')
-                            print(f'    Testing SUFFIX: "{feedback.suffix[:50] if feedback.suffix else ""}"')
+                            print(
+                                f'    Testing SUFFIX: "{feedback.suffix[:50] if feedback.suffix else ""}"'
+                            )
                         else:
-                            print(f'    Testing injection: "{feedback.injection_string}"')
+                            print(
+                                f'    Testing injection: "{feedback.injection_string}"'
+                            )
 
                     # Skip relevance check for prompt injections - they're almost always relevant
                     # if not self.check_injection_relevance(feedback.injection_string):
@@ -489,7 +521,9 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
                         if feedback.is_multi_sample:
                             best_prefix = feedback.prefix
                             best_suffix = feedback.suffix
-                            best_injection = f"{feedback.prefix}{{attacker_goal}}{feedback.suffix}"
+                            best_injection = (
+                                f"{feedback.prefix} {{attacker_goal}} {feedback.suffix}"
+                            )
                         else:
                             best_injection = feedback.injection_string
                             best_prefix = ""
@@ -499,9 +533,13 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
                     # For multi-sample mode, use success_rate vs required_success_rate
                     # For single-sample mode, use aggregated_score vs success_threshold
                     if multi_sample_mode:
-                        should_stop = result.success_rate >= self.config.required_success_rate
+                        should_stop = (
+                            result.success_rate >= self.config.required_success_rate
+                        )
                     else:
-                        should_stop = result.aggregated_score >= self.config.success_threshold
+                        should_stop = (
+                            result.aggregated_score >= self.config.success_threshold
+                        )
 
                     if should_stop:
                         runtime_seconds = time.time() - start_time
@@ -517,7 +555,9 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
                         print(f" |- Nodes evaluated: {nodes_evaluated}")
                         print(f" |- Mean score:      {result.aggregated_score:.2f}")
                         if multi_sample_mode:
-                            print(f" |- Success rate:    {result.success_rate:.0%} ({int(result.success_rate * result.total_examples)}/{result.total_examples} samples)")
+                            print(
+                                f" |- Success rate:    {result.success_rate:.0%} ({int(result.success_rate * result.total_examples)}/{result.total_examples} samples)"
+                            )
                         print(f"\n[+] API Request Summary:")
                         print(
                             f" |- Target model:    {self.request_counts['target']} requests"
@@ -567,7 +607,9 @@ class InjectionAttackFrameworkImpl(InjectionAttackFramework):
         print(f" |- Nodes evaluated: {nodes_evaluated}")
         print(f" |- Best mean score: {best_score:.2f}")
         if multi_sample_mode and best_result:
-            print(f" |- Best success rate: {best_result.success_rate:.0%} ({int(best_result.success_rate * best_result.total_examples)}/{best_result.total_examples} samples)")
+            print(
+                f" |- Best success rate: {best_result.success_rate:.0%} ({int(best_result.success_rate * best_result.total_examples)}/{best_result.total_examples} samples)"
+            )
         print(f"\n[+] API Request Summary:")
         print(f" |- Target model:    {self.request_counts['target']} requests")
         print(f" |- Evaluator model: {self.request_counts['evaluator']} requests")
