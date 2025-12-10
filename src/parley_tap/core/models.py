@@ -95,7 +95,7 @@ def chat_openai(
     messages: t.List[Message], parameters: Parameters
 ) -> t.Union[Message, t.Tuple[Message, t.List[t.Dict[str, t.Any]]]]:
     # Disable SDK's internal retry - let our custom retry logic handle it
-    return _chat_openai(OpenAI(max_retries=0), messages, parameters)
+    return _chat_openai(OpenAI(), messages, parameters)
 
 
 def chat_together(
@@ -105,7 +105,6 @@ def chat_together(
     client = openai.OpenAI(
         api_key=os.environ["TOGETHER_API_KEY"],
         base_url="https://api.together.xyz/v1",
-        max_retries=0,
     )
 
     return _chat_openai(client, messages, parameters)
